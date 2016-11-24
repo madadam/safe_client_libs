@@ -23,39 +23,57 @@ mod account;
 #[cfg(feature = "use-mock-routing")]
 mod mock_routing;
 
-pub use self::account::{ClientKeys, Dir};
+// mod routing_el;
 
-/*
-mod routing_el;
+// use core::{CoreMsg, CoreMsgTx, NetworkEvent,
+//            NetworkTx, utility};
+// use routing::{AppendWrapper, Data, DataIdentifier, Event, FullId,
+//               StructuredData, TYPE_TAG_SESSION_PACKET};
+// use futures::{self, Oneshot};
 
-use core::{CoreError, CoreFuture, CoreMsg, CoreMsgTx, FutureExt, NetworkEvent, NetworkTx, utility};
+use core::{CoreError, CoreFuture, FutureExt};
 use core::event::CoreEvent;
-use futures::{self, Complete, Future, Oneshot};
+use futures::{self, Complete, Future};
 use lru_cache::LruCache;
-use maidsafe_utilities::thread::{self, Joiner};
-use routing::{AppendWrapper, Authority, Data, DataIdentifier, Event, FullId, MessageId, Response,
-              StructuredData, TYPE_TAG_SESSION_PACKET, XorName};
+// use maidsafe_utilities::thread::Joiner;
+use routing::{Authority, ImmutableData, MessageId, XorName};
 #[cfg(not(feature = "use-mock-routing"))]
 use routing::Client as Routing;
-use routing::client_errors::MutationError;
-use rust_sodium::crypto::{box_, sign};
-use rust_sodium::crypto::hash::sha256::{self, Digest};
-use rust_sodium::crypto::secretbox;
-use self::account::Account;
+pub use self::account::{ClientKeys, Dir};
+// use self::account::Account;
+// use routing::client_errors::MutationError;
+// use rust_sodium::crypto::{box_, sign};
+// use rust_sodium::crypto::hash::sha256::{self, Digest};
+// use rust_sodium::crypto::secretbox;
+// use self::account::Account;
 #[cfg(feature = "use-mock-routing")]
 use self::mock_routing::MockRouting as Routing;
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver};
+// use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 use tokio_core::reactor::{Handle, Timeout};
 
-const ACC_PKT_TIMEOUT_SECS: u64 = 60;
-const CONNECTION_TIMEOUT_SECS: u64 = 10;
-const IMMUT_DATA_CACHE_SIZE: usize = 300;
-const REQUEST_TIMEOUT_SECS: u64 = 120;
+// const ACC_PKT_TIMEOUT_SECS: u64 = 60;
+// const CONNECTION_TIMEOUT_SECS: u64 = 10;
+// const IMMUT_DATA_CACHE_SIZE: usize = 300;
+// const REQUEST_TIMEOUT_SECS: u64 = 120;
+
+macro_rules! oneshot {
+    ($client:expr, $event:path) => {{
+        let msg_id = MessageId::new();
+        let (hook, oneshot) = futures::oneshot();
+        let fut = oneshot.map_err(|_| CoreError::OperationAborted)
+            .and_then(|event| match event {
+                $event(res) => res,
+                _ => Err(CoreError::ReceivedUnexpectedEvent),
+            });
+
+        (hook, $client.timeout(msg_id, fut), msg_id)
+    }}
+}
 
 /// The main self-authentication client instance that will interface all the
 /// request from high level API's to the actual routing layer and manage all
@@ -73,14 +91,15 @@ struct Inner {
     el_handle: Handle,
     routing: Routing,
     hooks: HashMap<MessageId, Complete<CoreEvent>>,
-    cache: LruCache<XorName, Data>,
-    client_type: ClientType,
-    stats: Stats,
+    cache: LruCache<XorName, ImmutableData>,
+    // client_type: ClientType,
+    // stats: Stats,
+    // joiner: Joiner,
     timeout: Duration,
-    joiner: Joiner,
 }
 
 impl Client {
+    /*
     /// This is a getter-only Gateway function to the Maidsafe network. It will
     /// create an unregistered random client, which can do very limited set of
     /// operations - eg., a Network-Get
@@ -316,71 +335,52 @@ impl Client {
             hook.complete(event);
         }
     }
+    */
 
     fn insert_hook(&self, msg_id: MessageId, hook: Complete<CoreEvent>) {
         let _ = self.inner_mut().hooks.insert(msg_id, hook);
     }
 
-    /// Get data from the network. If the data exists locally in the cache (for
-    /// ImmutableData) then it will immediately be returned without making an
-    /// actual network request.
-    pub fn get(&self,
-               data_id: DataIdentifier,
-               opt_dst: Option<Authority>)
-               -> Box<CoreFuture<Data>> {
-        trace!("GET for {:?}", data_id);
-        self.stats_mut().issued_gets += 1;
+    /// Get immutable data from the network. If the data exists locally in the cache
+    /// then it will be immediately be returned without making an actual network
+    /// request.
+    pub fn get_idata(&self,
+                     name: XorName,
+                     dst: Option<Authority>)
+                     -> Box<CoreFuture<ImmutableData>> {
+        trace!("GetIData for {:?}", name);
 
-        let msg_id = MessageId::new();
+        // TODO: stats
+        // self.stats_mut().get_idata += 1;
 
-        let (hook, oneshot) = futures::oneshot();
-        // TODO Implement some kind of From for these ignored errors in this file.
-        let rx = oneshot.map_err(|_| CoreError::OperationAborted)
-            .and_then(|event| match event {
-                CoreEvent::Get(res) => res,
-                _ => Err(CoreError::ReceivedUnexpectedEvent),
-            });
+        let (hook, rx, msg_id) = oneshot!(self, CoreEvent::GetIData);
 
         // Check if the data is in the cache. If it is, return it immediately.
         // If not, retrieve it from the network and store it in the cache.
-        let rx = if let DataIdentifier::Immutable(..) = data_id {
+        let rx = {
             let data = self.inner_mut()
                 .cache
-                .get_mut(data_id.name())
+                .get_mut(&name)
                 .map(|data| data.clone());
 
             if let Some(data) = data {
                 trace!("ImmutableData found in cache.");
-                hook.complete(CoreEvent::Get(Ok(data)));
+                hook.complete(CoreEvent::GetIData(Ok(data)));
                 return rx.into_box();
             }
 
             let inner = self.inner.clone();
-            let rx = rx.map(move |data| {
-                match data {
-                    ref data @ Data::Immutable(_) => {
-                        let _ = inner.borrow_mut()
-                            .cache
-                            .insert(*data.name(), data.clone());
-                    }
-                    _ => (),
-                }
-                data
-            });
-
-            self.timeout(msg_id, rx)
-        } else {
-            self.timeout(msg_id, rx)
+            rx.map(move |data| {
+                    let _ = inner.borrow_mut().cache.insert(*data.name(), data.clone());
+                    data
+                })
+                .into_box()
         };
 
-        let dst = match opt_dst {
-            Some(auth) => auth,
-            None => Authority::NaeManager(*data_id.name()),
-        };
-
-        let result = self.routing_mut().send_get_request(dst, data_id, msg_id);
-        if let Err(e) = result {
-            hook.complete(CoreEvent::Get(Err(From::from(e))));
+        let dst = dst.unwrap_or_else(|| Authority::NaeManager(name));
+        let result = self.routing_mut().get_idata(dst, name, msg_id);
+        if let Err(err) = result {
+            hook.complete(CoreEvent::GetIData(Err(CoreError::from(err))));
         } else {
             let _ = self.insert_hook(msg_id, hook);
         }
@@ -391,38 +391,41 @@ impl Client {
     // TODO All these return the same future from all branches. So convert to impl
     // Trait when it arrives in stable. Change from `Box<CoreFuture>` -> `impl
     // CoreFuture`.
-    /// Put data onto the network.
-    pub fn put(&self, data: Data, dst: Option<Authority>) -> Box<CoreFuture<()>> {
-        trace!("PUT for {:?}", data);
-        self.stats_mut().issued_puts += 1;
+    /// Put immutable data onto the network.
+    pub fn put_idata(&self, data: ImmutableData, dst: Option<Authority>) -> Box<CoreFuture<()>> {
+        trace!("PutIData for {:?}", data);
 
-        let msg_id = MessageId::new();
+        // TODO: stats
+        // self.stats_mut().put_idata += 1;
 
-        let (hook, oneshot) = futures::oneshot();
-        let rx = self.build_mutation_future(msg_id, oneshot);
+        let (hook, rx, msg_id) = oneshot!(self, CoreEvent::PutIData);
 
         let dst = match dst {
             Some(a) => Ok(a),
-            None => self.inner().client_type.cm_addr().map(|a| a.clone()),
+            // TODO: uncomment this
+            // None => self.inner().client_type.cm_addr().map(|a| a.clone()),
+            None => Err(CoreError::OperationForbiddenForClient),
         };
 
         let dst = match dst {
             Ok(a) => a,
             Err(e) => {
-                hook.complete(CoreEvent::Mutation(Err(e)));
+                hook.complete(CoreEvent::PutIData(Err(e)));
                 return rx;
             }
         };
 
-        let result = self.routing_mut().send_put_request(dst, data, msg_id);
+        let result = self.routing_mut().put_idata(dst, data, msg_id);
         if let Err(e) = result {
-            hook.complete(CoreEvent::Get(Err(From::from(e))));
+            hook.complete(CoreEvent::PutIData(Err(CoreError::from(e))));
         } else {
             let _ = self.insert_hook(msg_id, hook);
         }
 
         rx
     }
+
+    /*
 
     /// Put data to the network, with recovery.
     ///
@@ -820,6 +823,7 @@ impl Client {
             .and_then(move |data| self3.post(Data::Structured(data), None))
             .into_box()
     }
+    */
 
     fn timeout<F, T>(&self, msg_id: MessageId, future: F) -> Box<CoreFuture<T>>
         where F: Future<Item = T, Error = CoreError> + 'static,
@@ -851,26 +855,15 @@ impl Client {
             .into_box()
     }
 
-    fn build_mutation_future(&self,
-                             msg_id: MessageId,
-                             oneshot: Oneshot<CoreEvent>)
-                             -> Box<CoreFuture<()>> {
-        let fut = oneshot.map_err(|_| CoreError::OperationAborted)
-            .and_then(|event| match event {
-                CoreEvent::Mutation(res) => res,
-                _ => Err(CoreError::ReceivedUnexpectedEvent),
-            });
-
-        self.timeout(msg_id, fut)
-    }
-
     fn routing_mut(&self) -> RefMut<Routing> {
         RefMut::map(self.inner.borrow_mut(), |i| &mut i.routing)
     }
 
+    /*
     fn stats_mut(&self) -> RefMut<Stats> {
         RefMut::map(self.inner.borrow_mut(), |i| &mut i.stats)
     }
+    */
 
     fn inner(&self) -> Ref<Inner> {
         self.inner.borrow()
@@ -909,6 +902,7 @@ impl fmt::Debug for Client {
 // Helper Struct
 // ------------------------------------------------------------
 
+/*
 struct UserCred {
     pin: Vec<u8>,
     password: Vec<u8>,
@@ -980,28 +974,22 @@ impl ClientType {
 }
 
 struct Stats {
-    issued_gets: u64,
-    issued_puts: u64,
-    issued_posts: u64,
-    issued_deletes: u64,
-    issued_appends: u64,
+    get_idata: u64,
+    put_idata: u64, // TODO: other operations
 }
 
 impl Default for Stats {
     fn default() -> Self {
         Stats {
-            issued_gets: 0,
-            issued_puts: 0,
-            issued_posts: 0,
-            issued_deletes: 0,
-            issued_appends: 0,
+            get_idata: 0,
+            put_idata: 0,
         }
     }
 }
 
 fn setup_routing(full_id: Option<FullId>) -> Result<(Routing, Receiver<Event>), CoreError> {
     let (routing_tx, routing_rx) = mpsc::channel();
-    let routing = try!(Routing::new(routing_tx, full_id));
+    let routing = Routing::new(routing_tx, full_id)?;
 
     trace!("Waiting to get connected to the Network...");
     match routing_rx.recv_timeout(Duration::from_secs(CONNECTION_TIMEOUT_SECS)) {
@@ -1026,9 +1014,11 @@ fn spawn_routing_thread<T>(routing_rx: Receiver<Event>,
     thread::named("Routing Event Loop",
                   move || routing_el::run(routing_rx, core_tx, net_tx))
 }
+*/
 
 #[cfg(test)]
 mod tests {
+    /*
     use core::CoreError;
     use core::utility;
     use core::utility::test_utils::{finish, random_client, setup_client};
@@ -1351,5 +1341,5 @@ mod tests {
                 })
         })
     }
+    */
 }
-*/
