@@ -22,7 +22,7 @@
 use core::errors::CoreError;
 use maidsafe_utilities::serialisation::{deserialise, serialise};
 use rand;
-use routing::{XOR_NAME_LEN, XorName};
+use routing::{FullId, XOR_NAME_LEN, XorName};
 use rust_sodium::crypto::{box_, pwhash, secretbox, sign};
 use rust_sodium::crypto::hash::sha256;
 
@@ -135,7 +135,7 @@ impl Dir {
 }
 
 /// Client signing and encryption keypairs
-#[derive(Debug, PartialEq, RustcDecodable, RustcEncodable)]
+#[derive(Clone, Debug, PartialEq, RustcDecodable, RustcEncodable)]
 pub struct ClientKeys {
     /// Signing public key
     pub sign_pk: sign::PublicKey,
@@ -165,6 +165,12 @@ impl ClientKeys {
 impl Default for ClientKeys {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Into<FullId> for ClientKeys {
+    fn into(self) -> FullId {
+        FullId::with_keys((self.enc_pk, self.enc_sk), (self.sign_pk, self.sign_sk))
     }
 }
 

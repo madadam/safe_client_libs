@@ -20,21 +20,25 @@
 // and limitations relating to use of the SAFE Network Software.
 
 use core::CoreError;
-use routing::ImmutableData;
+use routing::{ImmutableData, Value};
 
-/*
 /// Network Events will be translated into values starting from this number for
 /// propagating them beyond the FFI boudaries when required
 pub const NETWORK_EVENT_START_RANGE: i32 = 0;
-*/
 
+/// Wraps responses from routing
 #[derive(Debug)]
 pub enum CoreEvent {
+    /// Result of getting ImmutableData
     GetIData(Result<ImmutableData, CoreError>),
+    /// Result of putting ImmutableData
     PutIData(Result<(), CoreError>),
+    /// Result of putting MutableData
+    PutMData(Result<(), CoreError>),
+    /// Result of getting a single value from MutableData
+    GetMDataValue(Result<Value, CoreError>),
 }
 
-/*
 /// Netowork Events that Client Modules need to deal with
 #[derive(Debug)]
 pub enum NetworkEvent {
@@ -54,4 +58,3 @@ impl Into<i32> for NetworkEvent {
         }
     }
 }
-*/
