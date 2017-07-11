@@ -63,6 +63,7 @@ fn get_core_event(res: Response) -> Result<(MessageId, CoreEvent), CoreError> {
            Response::DelMDataUserPermissions { res, msg_id } |
            Response::SetMDataUserPermissions { res, msg_id } |
            Response::MutateMDataEntries { res, msg_id } |
+           Response::DeleteMDataEntries { res, msg_id } |
            Response::PutMData { res, msg_id } |
            Response::PutIData { res, msg_id } |
            Response::InsAuthKey { res, msg_id } |

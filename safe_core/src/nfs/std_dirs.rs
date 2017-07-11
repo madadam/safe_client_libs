@@ -21,8 +21,7 @@ use futures::{Future, future};
 use maidsafe_utilities::serialisation::serialise;
 use nfs::{DEFAULT_PRIVATE_DIRS, DEFAULT_PUBLIC_DIRS, NfsError, NfsFuture};
 use nfs::dir::create_dir;
-use routing::{EntryAction, Value};
-use std::collections::BTreeMap;
+use routing::EntryActions;
 use utils::FutureExt;
 
 /// A registration helper function to create the set of default dirs
@@ -40,8 +39,7 @@ pub fn create_std_dirs<T: 'static>(client: Client<T>) -> Box<NfsFuture<()>> {
 
     future::join_all(creations)
         .and_then(move |results| {
-            // let results = fry!(res);
-            let mut actions = BTreeMap::new();
+            let mut actions = EntryActions::new();
             for (dir, name) in results
                     .iter()
                     .zip(DEFAULT_PRIVATE_DIRS
@@ -50,14 +48,10 @@ pub fn create_std_dirs<T: 'static>(client: Client<T>) -> Box<NfsFuture<()>> {
                 let serialised_dir = fry!(serialise(dir));
                 let encrypted_key = fry!(root_dir.enc_entry_key(name.as_bytes()));
                 let encrypted_value = fry!(root_dir.enc_entry_value(&serialised_dir));
-                let _ = actions.insert(encrypted_key,
-                                       EntryAction::Ins(Value {
-                                                            content: encrypted_value,
-                                                            entry_version: 0,
-                                                        }));
+                actions = actions.insert(encrypted_key, encrypted_value, 0);
             }
             client
-                .mutate_mdata_entries(root_dir.name, DIR_TAG, actions)
+                .mutate_mdata_entries(root_dir.name, DIR_TAG, actions.into(), 0)
                 .map_err(NfsError::from)
                 .into_box()
         })

@@ -432,6 +432,7 @@ impl Routing {
                                 name: XorName,
                                 tag: u64,
                                 actions: BTreeMap<Vec<u8>, EntryAction>,
+                                version: u64,
                                 msg_id: MessageId,
                                 requester: sign::PublicKey)
                                 -> Result<(), InterfaceError> {
@@ -442,9 +443,35 @@ impl Routing {
                           requester,
                           "mutate_mdata_entries",
                           SET_MDATA_ENTRIES_DELAY_MS,
-                          |data| data.mutate_entries(actions, requester),
+                          |data| data.mutate_entries(actions, version, requester),
                           |res| {
                               Response::MutateMDataEntries {
+                                  res: res,
+                                  msg_id: msg_id,
+                              }
+                          })
+    }
+
+    /// Deletes MutableData entries in bulk.
+    pub fn delete_mdata_entries(&mut self,
+                                dst: Authority<XorName>,
+                                name: XorName,
+                                tag: u64,
+                                keys: BTreeSet<Vec<u8>>,
+                                version: u64,
+                                msg_id: MessageId,
+                                requester: sign::PublicKey)
+                                -> Result<(), InterfaceError> {
+        self.mutate_mdata(dst,
+                          name,
+                          tag,
+                          msg_id,
+                          requester,
+                          "delete_mdata_entries",
+                          SET_MDATA_ENTRIES_DELAY_MS,
+                          |data| data.delete_entries(keys, version, requester),
+                          |res| {
+                              Response::DeleteMDataEntries {
                                   res: res,
                                   msg_id: msg_id,
                               }

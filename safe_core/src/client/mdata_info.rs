@@ -136,9 +136,8 @@ pub fn encrypt_entry_actions(info: &MDataInfo,
     for (key, action) in actions {
         let encrypted_key = info.enc_entry_key(key)?;
         let encrypted_action = match *action {
-            EntryAction::Ins(ref value) => EntryAction::Ins(encrypt_value(info, value)?),
+            EntryAction::Insert(ref value) => EntryAction::Insert(encrypt_value(info, value)?),
             EntryAction::Update(ref value) => EntryAction::Update(encrypt_value(info, value)?),
-            EntryAction::Del(version) => EntryAction::Del(version),
         };
 
         let _ = output.insert(encrypted_key, encrypted_action);

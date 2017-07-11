@@ -22,11 +22,13 @@ use maidsafe_utilities::serialisation::{deserialise, serialise};
 use nfs::{File, Mode, NfsError, NfsFuture, Reader, Writer};
 use routing::{ClientError, EntryActions};
 use self_encryption_storage::SelfEncryptionStorage;
+use std::iter;
 use utils::FutureExt;
 
 /// Insert the file into the directory.
 pub fn insert<S, T>(client: Client<T>,
                     parent: MDataInfo,
+                    parent_version: u64,
                     name: S,
                     file: &File)
                     -> Box<NfsFuture<()>>
@@ -48,7 +50,8 @@ pub fn insert<S, T>(client: Client<T>,
         .and_then(move |(key, value)| {
                       client.mutate_mdata_entries(parent.name,
                                                   parent.type_tag,
-                                                  EntryActions::new().ins(key, value, 0).into())
+                                                  EntryActions::new().insert(key, value, 0).into(),
+                                                  parent_version)
                   })
         .map_err(From::from)
         .into_box()
@@ -85,8 +88,8 @@ pub fn read<T: 'static>(client: Client<T>, file: &File) -> Box<NfsFuture<Reader<
 /// Delete a file from the Directory
 pub fn delete<S, T>(client: &Client<T>,
                     parent: &MDataInfo,
-                    name: S,
-                    version: u64)
+                    parent_version: u64,
+                    name: S)
                     -> Box<NfsFuture<()>>
     where S: AsRef<str>,
           T: 'static
@@ -97,9 +100,10 @@ pub fn delete<S, T>(client: &Client<T>,
     let key = fry!(parent.enc_entry_key(name.as_bytes()));
 
     client
-        .mutate_mdata_entries(parent.name,
+        .delete_mdata_entries(parent.name,
                               parent.type_tag,
-                              EntryActions::new().del(key, version).into())
+                              iter::once(key).collect(),
+                              parent_version)
         .map_err(convert_error)
         .into_box()
 }
@@ -109,6 +113,7 @@ pub fn delete<S, T>(client: &Client<T>,
 /// and that version incremented by one is then used as the actual version.
 pub fn update<S, T>(client: Client<T>,
                     parent: MDataInfo,
+                    parent_version: u64,
                     name: S,
                     file: &File,
                     version: u64)
@@ -143,7 +148,8 @@ pub fn update<S, T>(client: Client<T>,
                                                    parent.type_tag,
                                                    EntryActions::new()
                                                        .update(key, content, version)
-                                                       .into())
+                                                       .into(),
+                                                   parent_version)
                   })
         .map_err(convert_error)
         .into_box()
@@ -202,7 +208,7 @@ mod tests {
             .then(move |res| {
                       let file = unwrap!(res);
 
-                      file_helper::insert(c2, user_root.clone(), "hello.txt", &file)
+                      file_helper::insert(c2, user_root.clone(), 0, "hello.txt", &file)
                           .map(move |_| (user_root, file))
                   })
             .into_box()
@@ -256,7 +262,7 @@ mod tests {
                       })
                 .then(move |res| {
                           let (file, dir) = unwrap!(res);
-                          file_helper::update(c3, dir.clone(), "hello.txt", &file, 1)
+                          file_helper::update(c3, dir.clone(), 0, "hello.txt", &file, 1)
                               .map(move |_| dir)
                       })
                 .then(move |res| {
@@ -326,7 +332,7 @@ mod tests {
                 .then(move |res| {
                           let (dir, mut file) = unwrap!(res);
                           file.set_user_metadata(vec![12u8; 10]);
-                          file_helper::update(c2, dir, "hello.txt", &file, 1)
+                          file_helper::update(c2, dir, 0, "hello.txt", &file, 1)
                       })
                 .then(move |res| {
                           assert!(res.is_ok());
@@ -347,7 +353,7 @@ mod tests {
             create_test_file(client)
                 .then(move |res| {
                           let (dir, _file) = unwrap!(res);
-                          file_helper::delete(&c2, &dir, "hello.txt", 1)
+                          file_helper::delete(&c2, &dir, 1, "hello.txt")
                       })
                 .then(move |res| {
                           assert!(res.is_ok());

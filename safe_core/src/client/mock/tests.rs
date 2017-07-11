@@ -209,18 +209,18 @@ fn mutable_data_basics() {
     let value1_v0 = unwrap!(utils::generate_random_vector(10));
 
     let actions = btree_map![
-            key0.to_vec() => EntryAction::Ins(Value {
+            key0.to_vec() => EntryAction::Insert(Value {
                 content: value0_v0.clone(),
                 entry_version: 0,
             }),
-            key1.to_vec() => EntryAction::Ins(Value {
+            key1.to_vec() => EntryAction::Insert(Value {
                 content: value1_v0.clone(),
                 entry_version: 0,
             })
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, 0, msg_id, owner_key));
     expect_success!(routing_rx, msg_id, Response::MutateMDataEntries);
 
     // ListMDataEntries
@@ -273,7 +273,7 @@ fn mutable_data_basics() {
                     Response::GetMDataValue,
                     ClientError::NoSuchEntry);
 
-    // Mutate the entries: insert, update and delete
+    // Mutate the entries: insert and update
     let value0_v1 = unwrap!(utils::generate_random_vector(10));
     let value2_v0 = unwrap!(utils::generate_random_vector(10));
     let actions = btree_map![
@@ -281,15 +281,14 @@ fn mutable_data_basics() {
                 content: value0_v1.clone(),
                 entry_version: 1,
             }),
-            key1.to_vec() => EntryAction::Del(1),
-            key2.to_vec() => EntryAction::Ins(Value {
+            key2.to_vec() => EntryAction::Insert(Value {
                 content: value2_v0.clone(),
                 entry_version: 0,
             })
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, 0, msg_id, owner_key));
     expect_success!(routing_rx, msg_id, Response::MutateMDataEntries);
 
     // ListMDataEntries should respond with modified entries
@@ -303,15 +302,12 @@ fn mutable_data_basics() {
     assert_eq!(entry.content, value0_v1);
     assert_eq!(entry.entry_version, 1);
 
-    // Deleted entry
-    let entry = unwrap!(entries.get(&key1[..]));
-    assert!(entry.content.is_empty());
-    assert_eq!(entry.entry_version, 1);
-
     // Inserted entry
     let entry = unwrap!(entries.get(&key2[..]));
     assert_eq!(entry.content, value2_v0);
     assert_eq!(entry.entry_version, 0);
+
+    // TODO: delete entries
 }
 
 #[test]
@@ -340,14 +336,14 @@ fn mutable_data_entry_versioning() {
     let key = b"key0";
     let value_v0 = unwrap!(utils::generate_random_vector(10));
     let actions = btree_map![
-            key.to_vec() => EntryAction::Ins(Value {
+            key.to_vec() => EntryAction::Insert(Value {
                 content: value_v0,
                 entry_version: 0,
             })
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, 0, msg_id, owner_key));
     expect_success!(routing_rx, msg_id, Response::MutateMDataEntries);
 
     // Attempt to update it without version bump fails.
@@ -360,7 +356,7 @@ fn mutable_data_entry_versioning() {
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, 0, msg_id, owner_key));
     expect_failure!(routing_rx,
                     msg_id,
                     Response::MutateMDataEntries,
@@ -371,7 +367,7 @@ fn mutable_data_entry_versioning() {
         .update(key.to_vec(), value_v1.clone(), 314159265)
         .into();
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, 0, msg_id, owner_key));
     expect_failure!(routing_rx,
                     msg_id,
                     Response::MutateMDataEntries,
@@ -386,29 +382,27 @@ fn mutable_data_entry_versioning() {
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, 0, msg_id, owner_key));
     expect_success!(routing_rx, msg_id, Response::MutateMDataEntries);
 
     // Delete without version bump fails.
-    let actions = btree_map![
-            key.to_vec() => EntryAction::Del(1)
-        ];
-
+    let keys = btree_set![key.to_vec()];
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.delete_mdata_entries(client_mgr,
+                                         name,
+                                         tag,
+                                         keys.clone(),
+                                         0,
+                                         msg_id,
+                                         owner_key));
     expect_failure!(routing_rx,
                     msg_id,
-                    Response::MutateMDataEntries,
+                    Response::DeleteMDataEntries,
                     ClientError::InvalidSuccessor);
 
-    // Delete with correct version bump succeeds.
-    let actions = btree_map![
-            key.to_vec() => EntryAction::Del(2)
-        ];
-
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
-    expect_success!(routing_rx, msg_id, Response::MutateMDataEntries);
+    unwrap!(routing.delete_mdata_entries(client_mgr, name, tag, keys, 1, msg_id, owner_key));
+    expect_success!(routing_rx, msg_id, Response::DeleteMDataEntries);
 }
 
 #[test]
@@ -455,7 +449,7 @@ fn mutable_data_permissions() {
         .update(key0.to_vec(), value0_v1, 1)
         .into();
     let msg_id = MessageId::new();
-    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, owner_key));
+    unwrap!(routing.mutate_mdata_entries(client_mgr, name, tag, actions, 0, msg_id, owner_key));
     expect_success!(routing_rx, msg_id, Response::MutateMDataEntries);
 
     // Create app and authorise it.
@@ -476,7 +470,13 @@ fn mutable_data_permissions() {
         .update(key0.to_vec(), value0_v2.clone(), 2)
         .into();
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             0,
+                                             msg_id,
+                                             app_sign_key));
     expect_failure!(app_routing_rx,
                     msg_id,
                     Response::MutateMDataEntries,
@@ -504,7 +504,13 @@ fn mutable_data_permissions() {
         .update(key0.to_vec(), value0_v2.clone(), 2)
         .into();
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             0,
+                                             msg_id,
+                                             app_sign_key));
     expect_failure!(app_routing_rx,
                     msg_id,
                     Response::MutateMDataEntries,
@@ -538,24 +544,36 @@ fn mutable_data_permissions() {
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             1,
+                                             msg_id,
+                                             app_sign_key));
     expect_failure!(app_routing_rx,
                     msg_id,
                     Response::MutateMDataEntries,
                     ClientError::AccessDenied);
 
-    // But it insert new ones.
+    // But it can insert new ones.
     let key1 = b"key1";
     let value1_v0 = unwrap!(utils::generate_random_vector(10));
     let actions = btree_map![
-            key1.to_vec() => EntryAction::Ins(Value {
+            key1.to_vec() => EntryAction::Insert(Value {
                 content: value1_v0,
                 entry_version: 0,
             })
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             1,
+                                             msg_id,
+                                             app_sign_key));
     expect_success!(app_routing_rx, msg_id, Response::MutateMDataEntries);
 
     // Attempt to modify permissions without proper version bump fails
@@ -600,7 +618,13 @@ fn mutable_data_permissions() {
         ];
 
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             2,
+                                             msg_id,
+                                             app_sign_key));
     expect_success!(app_routing_rx, msg_id, Response::MutateMDataEntries);
 
     // Revoke all permissions from app.
@@ -618,10 +642,16 @@ fn mutable_data_permissions() {
     let key2 = b"key2";
     let value2_v0 = unwrap!(utils::generate_random_vector(10));
     let actions = EntryActions::new()
-        .ins(key2.to_vec(), value2_v0, 0)
+        .insert(key2.to_vec(), value2_v0, 0)
         .into();
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             3,
+                                             msg_id,
+                                             app_sign_key));
     expect_failure!(app_routing_rx,
                     msg_id,
                     Response::MutateMDataEntries,
@@ -646,7 +676,13 @@ fn mutable_data_permissions() {
         .update(key1.to_vec(), value1_v1, 1)
         .into();
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             4,
+                                             msg_id,
+                                             app_sign_key));
     expect_failure!(app_routing_rx,
                     msg_id,
                     Response::MutateMDataEntries,
@@ -671,7 +707,13 @@ fn mutable_data_permissions() {
         .update(key1.to_vec(), value1_v1, 1)
         .into();
     let msg_id = MessageId::new();
-    unwrap!(app_routing.mutate_mdata_entries(client_mgr, name, tag, actions, msg_id, app_sign_key));
+    unwrap!(app_routing.mutate_mdata_entries(client_mgr,
+                                             name,
+                                             tag,
+                                             actions,
+                                             5,
+                                             msg_id,
+                                             app_sign_key));
     expect_success!(app_routing_rx, msg_id, Response::MutateMDataEntries);
 
     // Create another app and authorise it.
@@ -690,13 +732,14 @@ fn mutable_data_permissions() {
     let key3 = b"key3";
     let value3_v0 = unwrap!(utils::generate_random_vector(10));
     let actions = EntryActions::new()
-        .ins(key3.to_vec(), value3_v0.clone(), 0)
+        .insert(key3.to_vec(), value3_v0.clone(), 0)
         .into();
     let msg_id = MessageId::new();
     unwrap!(app2_routing.mutate_mdata_entries(client_mgr,
                                               name,
                                               tag,
                                               actions,
+                                              5,
                                               msg_id,
                                               app2_sign_key));
     expect_failure!(app2_routing_rx,
@@ -719,13 +762,14 @@ fn mutable_data_permissions() {
 
     // The new app can now mutate entries
     let actions = EntryActions::new()
-        .ins(key3.to_vec(), value3_v0, 0)
+        .insert(key3.to_vec(), value3_v0, 0)
         .into();
     let msg_id = MessageId::new();
     unwrap!(app2_routing.mutate_mdata_entries(client_mgr,
                                               name,
                                               tag,
                                               actions,
+                                              6,
                                               msg_id,
                                               app2_sign_key));
     expect_success!(app2_routing_rx, msg_id, Response::MutateMDataEntries);
@@ -745,13 +789,14 @@ fn mutable_data_permissions() {
     let key4 = b"key4";
     let value4_v0 = unwrap!(utils::generate_random_vector(10));
     let actions = EntryActions::new()
-        .ins(key4.to_vec(), value4_v0.clone(), 0)
+        .insert(key4.to_vec(), value4_v0.clone(), 0)
         .into();
     let msg_id = MessageId::new();
     unwrap!(app2_routing.mutate_mdata_entries(client_mgr,
                                               name,
                                               tag,
                                               actions,
+                                              7,
                                               msg_id,
                                               app2_sign_key));
     expect_failure!(app2_routing_rx,

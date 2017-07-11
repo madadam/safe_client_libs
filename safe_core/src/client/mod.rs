@@ -39,9 +39,9 @@ use ipc::BootstrapConfig;
 use lru_cache::LruCache;
 use maidsafe_utilities::serialisation::{deserialise, serialise};
 use maidsafe_utilities::thread::{self, Joiner};
-use routing::{ACC_LOGIN_ENTRY_KEY, AccountInfo, AccountPacket, Authority, EntryAction, Event,
-              FullId, ImmutableData, InterfaceError, MessageId, MutableData, PermissionSet,
-              Response, TYPE_TAG_SESSION_PACKET, User, Value, XorName};
+use routing::{ACC_LOGIN_ENTRY_KEY, AccountInfo, AccountPacket, Authority, EntryAction,
+              EntryActions, Event, FullId, ImmutableData, InterfaceError, MessageId, MutableData,
+              PermissionSet, Response, TYPE_TAG_SESSION_PACKET, User, Value, XorName};
 #[cfg(not(feature = "use-mock-routing"))]
 use routing::Client as Routing;
 use rust_sodium::crypto::box_;
@@ -556,19 +556,36 @@ impl<T: 'static> Client<T> {
     pub fn mutate_mdata_entries(&self,
                                 name: XorName,
                                 tag: u64,
-                                actions: BTreeMap<Vec<u8>, EntryAction>)
+                                actions: BTreeMap<Vec<u8>, EntryAction>,
+                                version: u64)
                                 -> Box<CoreFuture<()>> {
-        trace!("PutMData for {:?}", name);
+        trace!("MutateMDataEntries for {:?}", name);
 
         let requester = fry!(self.public_signing_key());
         self.send_mutation(move |routing, dst, msg_id| {
-                               routing.mutate_mdata_entries(dst,
-                                                            name,
-                                                            tag,
-                                                            actions.clone(),
-                                                            msg_id,
-                                                            requester)
-                           })
+            routing.mutate_mdata_entries(dst,
+                                         name,
+                                         tag,
+                                         actions.clone(),
+                                         version,
+                                         msg_id,
+                                         requester)
+        })
+    }
+
+    /// Deletes `MutableData` entries in bulk.
+    pub fn delete_mdata_entries(&self,
+                                name: XorName,
+                                tag: u64,
+                                keys: BTreeSet<Vec<u8>>,
+                                version: u64)
+                                -> Box<CoreFuture<()>> {
+        trace!("DeleteMDataEntries for {:?}", name);
+
+        let requester = fry!(self.public_signing_key());
+        self.send_mutation(move |routing, dst, msg_id| {
+            routing.delete_mdata_entries(dst, name, tag, keys.clone(), version, msg_id, requester)
+        })
     }
 
     /// Get entire `MutableData` from the network.
@@ -895,14 +912,11 @@ impl<T: 'static> Client<T> {
 
         let content = fry!(serialise(&AccountPacket::AccPkt(encrypted_account)));
 
-        let mut actions = BTreeMap::new();
-        let _ = actions.insert(ACC_LOGIN_ENTRY_KEY.to_owned(),
-                               EntryAction::Update(Value {
-                                                       content,
-                                                       entry_version,
-                                                   }));
+        let actions = EntryActions::new()
+            .update(ACC_LOGIN_ENTRY_KEY.to_owned(), content, entry_version)
+            .into();
 
-        self.mutate_mdata_entries(data_name, TYPE_TAG_SESSION_PACKET, actions)
+        self.mutate_mdata_entries(data_name, TYPE_TAG_SESSION_PACKET, actions, 0)
     }
 
     /// Sends a request and returns a future that resolves to the response.
